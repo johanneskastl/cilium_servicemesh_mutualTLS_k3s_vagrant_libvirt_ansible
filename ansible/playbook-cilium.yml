@@ -1,0 +1,147 @@
+---
+
+- name: 'Gather facts'
+  hosts: 'all'
+  gather_facts: true
+
+- name: 'Install Cilium'
+  hosts: 'k3s1'
+  gather_facts: false
+  become: false
+  module_defaults:
+    kubernetes.core.helm:
+      kubeconfig: './k3s-kubeconfig'
+    kubernetes.core.k8s:
+      kubeconfig: './k3s-kubeconfig'
+    kubernetes.core.k8s_info:
+      kubeconfig: './k3s-kubeconfig'
+
+  tasks:
+
+    - name: 'Install GatewayAPI CRDs'
+      # running this from vagrant fails, if we target localhost directly
+      delegate_to: 'localhost'
+      kubernetes.core.k8s:
+        state: 'present'
+        src: "{{ item }}"
+      loop:
+        - https://raw.githubusercontent.com/kubernetes-sigs/gateway-api/v1.1.0/config/crd/standard/gateway.networking.k8s.io_gatewayclasses.yaml
+        - https://raw.githubusercontent.com/kubernetes-sigs/gateway-api/v1.1.0/config/crd/standard/gateway.networking.k8s.io_gateways.yaml
+        - https://raw.githubusercontent.com/kubernetes-sigs/gateway-api/v1.1.0/config/crd/standard/gateway.networking.k8s.io_httproutes.yaml
+        - https://raw.githubusercontent.com/kubernetes-sigs/gateway-api/v1.1.0/config/crd/standard/gateway.networking.k8s.io_referencegrants.yaml
+        - https://raw.githubusercontent.com/kubernetes-sigs/gateway-api/v1.1.0/config/crd/experimental/gateway.networking.k8s.io_grpcroutes.yaml
+        - https://raw.githubusercontent.com/kubernetes-sigs/gateway-api/v1.1.0/config/crd/experimental/gateway.networking.k8s.io_tlsroutes.yaml
+
+
+    - name: 'Install Cilium via helm chart'
+      # running this from vagrant fails, if we target localhost directly
+      delegate_to: 'localhost'
+      kubernetes.core.helm:
+        chart_repo_url: 'https://helm.cilium.io/'
+        release_name: 'cilium'
+        chart_ref: 'cilium'
+        release_namespace: 'kube-system'
+        values:
+          ipam:
+            operator:
+              clusterPoolIPv4PodCIDRList: "10.42.0.0/16"
+          operator:
+            replicas: 1
+          nodePort:
+            enabled: true
+          kubeProxyReplacement: true
+          k8sServiceHost: "{{ hostvars[inventory_hostname]['ansible_default_ipv4']['address'] }}"
+          k8sServicePort: 6443
+          ingressController:
+            enabled: false
+          gatewayAPI:
+            enabled: true
+          l7Proxy: true
+          loadBalancer:
+            l7:
+              backend: 'envoy'
+          authentication:
+            mutual:
+              spire:
+                enabled: true
+                install:
+                  enabled: true
+          hubble:
+            relay:
+              enabled: true
+            ui:
+              enabled: true
+              frontend:
+                server:
+                  ipv6:
+                    enabled: false
+
+    - name: 'Wait until all pods are running in the kube-system namespace'
+      delegate_to: localhost
+      become: false
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: kube-system
+      register: pod_list
+      until:
+        '
+        pod_list | json_query("resources[*].status.phase") | unique | sort == ["Running"]
+        or
+        pod_list | json_query("resources[*].status.phase") | unique | sort == ["Running", "Succeeded"]
+        '
+      retries: 24
+      delay: 10
+
+    - name: 'Wait until all pods are ready in the kube-system namespace'
+      delegate_to: localhost
+      become: false
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: kube-system
+      register: pod_list_ready
+      # pods with two containers show up as [true, true]
+      until:
+        '
+        pod_list_ready | json_query("resources[*].status.containerStatuses[*].ready") | unique | sort == [[true]]
+        or
+        pod_list_ready | json_query("resources[*].status.containerStatuses[*].ready") | unique | sort == [[true], [true, true]]
+        '
+      retries: 12
+      delay: 10
+
+    - name: 'Wait until all pods are running in the cilium-spire namespace'
+      delegate_to: localhost
+      become: false
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: kube-system
+      register: pod_list
+      until:
+        '
+        pod_list | json_query("resources[*].status.phase") | unique | sort == ["Running"]
+        or
+        pod_list | json_query("resources[*].status.phase") | unique | sort == ["Running", "Succeeded"]
+        '
+      retries: 24
+      delay: 10
+
+    - name: 'Wait until all pods are ready in the cilium-spire namespace'
+      delegate_to: localhost
+      become: false
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: kube-system
+      register: pod_list_ready
+      # pods with two containers show up as [true, true]
+      until:
+        '
+        pod_list_ready | json_query("resources[*].status.containerStatuses[*].ready") | unique | sort == [[true]]
+        or
+        pod_list_ready | json_query("resources[*].status.containerStatuses[*].ready") | unique | sort == [[true], [true, true]]
+        '
+      retries: 12
+      delay: 10
