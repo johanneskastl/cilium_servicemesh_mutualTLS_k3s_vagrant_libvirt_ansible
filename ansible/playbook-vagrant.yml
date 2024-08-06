@@ -8,3 +8,6 @@
 
 - name: 'Run playbook-gateway.yml'
   ansible.builtin.import_playbook: playbook-gateway.yml
+
+- name: 'Run playbook-nginx.yml'
+  ansible.builtin.import_playbook: playbook-nginx.yml
